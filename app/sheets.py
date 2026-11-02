@@ -34,24 +34,24 @@ class SheetsLedger:
 
     def ensure_tabs(self) -> None:
         """Create the tabs / header rows if they're missing (safe to run repeatedly)."""
-        meta = self.api.get(spreadsheetId=self.sheet_id, fields="sheets.properties.title").execute()
+        meta = self.api.get(spreadsheetId=self.sheet_id, fields="sheets.properties.title").execute(num_retries=3)
         have = {s["properties"]["title"] for s in meta["sheets"]}
         missing = [t for t in TABS if t not in have]
         if missing:
             self.api.batchUpdate(
                 spreadsheetId=self.sheet_id,
                 body={"requests": [{"addSheet": {"properties": {"title": t}}} for t in missing]},
-            ).execute()
+            ).execute(num_retries=3)
         for tab, headers in TABS.items():
-            first = self.api.values().get(spreadsheetId=self.sheet_id, range=f"{tab}!A1:A1").execute()
+            first = self.api.values().get(spreadsheetId=self.sheet_id, range=f"{tab}!A1:A1").execute(num_retries=3)
             if not first.get("values"):
                 self.api.values().update(
                     spreadsheetId=self.sheet_id, range=f"{tab}!A1", valueInputOption="RAW", body={"values": [headers]}
-                ).execute()
+                ).execute(num_retries=3)
 
     # ----- Contacts -----
     def _find_row(self, digits: str) -> tuple[int | None, list[str]]:
-        rows = self.api.values().get(spreadsheetId=self.sheet_id, range="Contacts!A:H").execute().get("values", [])
+        rows = self.api.values().get(spreadsheetId=self.sheet_id, range="Contacts!A:H").execute(num_retries=3).get("values", [])
         for i, row in enumerate(rows[1:], start=2):  # row 1 is the header
             if row and re.sub(r"\D", "", row[0]) == digits:
                 return i, row + [""] * (len(CONTACT_HEADERS) - len(row))
@@ -79,12 +79,12 @@ class SheetsLedger:
                 self.api.values().append(
                     spreadsheetId=self.sheet_id, range="Contacts!A:H", valueInputOption="RAW",
                     insertDataOption="INSERT_ROWS", body={"values": [row]},
-                ).execute()
+                ).execute(num_retries=3)
             else:
                 self.api.values().update(
                     spreadsheetId=self.sheet_id, range=f"Contacts!A{idx}:H{idx}", valueInputOption="RAW",
                     body={"values": [row]},
-                ).execute()
+                ).execute(num_retries=3)
 
     def upsert_contact(self, ctx: CallContext, name=None, phone=None, vehicle=None) -> None:
         self._touch_contact(ctx)
@@ -96,5 +96,5 @@ class SheetsLedger:
                 insertDataOption="INSERT_ROWS",
                 body={"values": [[self._stamp(), ctx.session_id, format_phone(ctx.phone) if ctx.phone else "",
                                   ctx.name or "", topic, summary, "YES" if handoff else ""]]},
-            ).execute()
+            ).execute(num_retries=3)
         self._touch_contact(ctx, history_line=f"{topic}: {summary}", handoff=handoff)

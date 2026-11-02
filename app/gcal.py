@@ -35,7 +35,7 @@ class GoogleCalendar:
             resp = self.service.events().list(
                 calendarId=self.calendar_id, singleEvents=True, orderBy="startTime",
                 maxResults=250, pageToken=token, **params,
-            ).execute()
+            ).execute(num_retries=3)
             items += resp.get("items", [])
             token = resp.get("nextPageToken")
             if not token:
@@ -76,11 +76,11 @@ class GoogleCalendar:
             "start": self._dt(start), "end": self._dt(end),
             "extendedProperties": {"private": {"phone": phone, "service": service_key, "source": "ai-receptionist"}},
         }
-        return self.service.events().insert(calendarId=self.calendar_id, body=body).execute()["id"]
+        return self.service.events().insert(calendarId=self.calendar_id, body=body).execute(num_retries=3)["id"]
 
     def get_event(self, event_id):
         try:
-            e = self.service.events().get(calendarId=self.calendar_id, eventId=event_id).execute()
+            e = self.service.events().get(calendarId=self.calendar_id, eventId=event_id).execute(num_retries=3)
         except HttpError as err:
             if err.resp.status in (404, 410):
                 return None
@@ -90,15 +90,15 @@ class GoogleCalendar:
     def move_event(self, event_id, start, end):
         self.service.events().patch(
             calendarId=self.calendar_id, eventId=event_id, body={"start": self._dt(start), "end": self._dt(end)}
-        ).execute()
+        ).execute(num_retries=3)
 
     def delete_event(self, event_id):
-        self.service.events().delete(calendarId=self.calendar_id, eventId=event_id).execute()
+        self.service.events().delete(calendarId=self.calendar_id, eventId=event_id).execute(num_retries=3)
 
     def append_note(self, event_id, text):
-        e = self.service.events().get(calendarId=self.calendar_id, eventId=event_id).execute()
+        e = self.service.events().get(calendarId=self.calendar_id, eventId=event_id).execute(num_retries=3)
         desc = (e.get("description") or "") + "\n" + text
-        self.service.events().patch(calendarId=self.calendar_id, eventId=event_id, body={"description": desc}).execute()
+        self.service.events().patch(calendarId=self.calendar_id, eventId=event_id, body={"description": desc}).execute(num_retries=3)
 
     def find_by_phone(self, phone, from_dt):
         events = self._events(timeMin=from_dt.isoformat(), privateExtendedProperty=f"phone={phone}")

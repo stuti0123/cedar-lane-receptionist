@@ -25,7 +25,7 @@ def main() -> None:
     # remove previous seed events
     now = datetime.now(TZ)
     for e in cal._events(timeMin=now.isoformat(), privateExtendedProperty="seed=1"):
-        svc.delete(calendarId=cal.calendar_id, eventId=e["id"]).execute()
+        svc.delete(calendarId=cal.calendar_id, eventId=e["id"]).execute(num_retries=3)
 
     today = datetime.now(TZ).date()
     thu, tue = next_weekday(3, today), next_weekday(1, today)
@@ -47,7 +47,7 @@ def main() -> None:
         eid = original_create(**kw)
         svc.patch(calendarId=cal.calendar_id, eventId=eid,
                   body={"extendedProperties": {"private": {"seed": "1", "phone": kw["phone"],
-                                                           "service": kw["service_key"], "source": "seed"}}}).execute()
+                                                           "service": kw["service_key"], "source": "seed"}}}).execute(num_retries=3)
         return eid
 
     cal.create_event = tagged_create  # type: ignore[method-assign]
@@ -62,7 +62,7 @@ def main() -> None:
         "summary": "Shop closed - staff training", "start": {"date": fri.isoformat()},
         "end": {"date": (fri + timedelta(days=1)).isoformat()},
         "extendedProperties": {"private": {"seed": "1"}},
-    }).execute()
+    }).execute(num_retries=3)
 
     SheetsLedger(google_service("sheets", "v4")).ensure_tabs()
     print(f"Seeded. Thursday {thu}: 10:00 full detail, 3:30 PM interior detail & wash (taken). "

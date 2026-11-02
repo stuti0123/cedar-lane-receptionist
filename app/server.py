@@ -1,47 +1,61 @@
 """Tiny web server: POST /chat for the agent, GET / for a bare chat page. Phase 2 (Vapi) will call
 the same Agent from another endpoint."""
 import logging
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .agent import Agent, Session
-from .booking import Booking
-from .gcal import GoogleCalendar, google_service
-from .sheets import SheetsLedger
-from .tools import Deps
+from .agent import Agent
+from .sessions import SessionStore
+from .wiring import build_agent
 
-logging.basicConfig(level=logging.INFO)
-app = FastAPI()
-sessions: dict[str, Session] = {}
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger(__name__)
 
 
 @lru_cache
 def get_agent() -> Agent:
-    ledger = SheetsLedger(google_service("sheets", "v4"))
-    ledger.ensure_tabs()
-    return Agent(Deps(booking=Booking(GoogleCalendar()), ledger=ledger))
+    return build_agent()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    get_agent()  # build now: a bad config or Google permission problem stops the server at startup
+    log.info("Receptionist ready")
+    yield
+
+
+app = FastAPI(title="Cedar Lane receptionist", lifespan=lifespan)
+store: SessionStore = SessionStore(lambda sid: get_agent().new_session(sid))
 
 
 class ChatIn(BaseModel):
-    session_id: str
-    message: str
+    session_id: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=1000)
 
 
 @app.post("/chat")
 def chat(body: ChatIn) -> dict:
-    agent = get_agent()
-    session = sessions.setdefault(body.session_id, agent.new_session(body.session_id))
-    return {"reply": agent.reply(session, body.message)}
+    try:
+        return {"reply": get_agent().reply(store.get(body.session_id), body.message)}
+    except Exception:
+        log.exception("chat failed (session %s)", body.session_id)
+        raise HTTPException(status_code=500, detail="Something went wrong. Check the server log.")
 
 
 @app.post("/reset/{session_id}")
 def reset(session_id: str) -> dict:
-    sessions.pop(session_id, None)
+    store.drop(session_id)
     return {"ok": True}
+
+
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok", "open_conversations": len(store)}
 
 
 @app.get("/")
