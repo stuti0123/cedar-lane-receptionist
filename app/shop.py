@@ -65,7 +65,7 @@ HANDOFF_TOPICS = [
 
 
 def _t(t: time) -> str:
-    return t.strftime("%-I:%M %p")
+    return f"{t.hour % 12 or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}"
 
 
 def hours_text() -> str:

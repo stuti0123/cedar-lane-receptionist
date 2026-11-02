@@ -41,7 +41,7 @@ class BookingError(Exception):
 
 
 def label(dt: datetime) -> str:
-    return dt.strftime("%-I:%M %p")
+    return f"{dt.hour % 12 or 12}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}"
 
 
 def slot(dt: datetime) -> dict:
