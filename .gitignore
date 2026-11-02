@@ -1,0 +1,6 @@
+.env
+service_account.json
+*.json.key
+__pycache__/
+.pytest_cache/
+.venv/

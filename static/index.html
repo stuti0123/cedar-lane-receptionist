@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cedar Lane Auto Detailing</title>
+<style>
+  body { font: 15px system-ui; max-width: 560px; margin: 24px auto; padding: 0 12px; }
+  #log { border: 1px solid #ccc; height: 420px; overflow-y: auto; padding: 8px; border-radius: 6px; }
+  .you { text-align: right; color: #145; } .bot { color: #222; } p { margin: 6px 0; }
+  form { display: flex; gap: 6px; margin-top: 8px; } input { flex: 1; padding: 8px; }
+</style>
+<h3>Cedar Lane Auto Detailing <button id="new">New call</button></h3>
+<div id="log"></div>
+<form id="f"><input id="m" autocomplete="off" placeholder="Say something..." autofocus><button>Send</button></form>
+<script>
+  let sid = crypto.randomUUID();
+  const log = document.getElementById("log"), m = document.getElementById("m");
+  const add = (who, text) => { const p = document.createElement("p"); p.className = who; p.textContent = text; log.append(p); log.scrollTop = log.scrollHeight; };
+  document.getElementById("f").onsubmit = async (e) => {
+    e.preventDefault();
+    const text = m.value.trim(); if (!text) return;
+    m.value = ""; add("you", text);
+    try {
+      const r = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sid, message: text }) });
+      add("bot", (await r.json()).reply || "(error: check server logs)");
+    } catch { add("bot", "(network error)"); }
+  };
+  document.getElementById("new").onclick = () => { fetch("/reset/" + sid, { method: "POST" }); sid = crypto.randomUUID(); log.innerHTML = ""; };
+</script>
