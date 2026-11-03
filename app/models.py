@@ -10,6 +10,8 @@ class Busy:
     start: datetime
     end: datetime
     event_id: str | None = None
+    all_day: bool = False  # an all-day calendar event (holiday, staff training...) closes the whole day
+    title: str = ""
 
 
 @dataclass

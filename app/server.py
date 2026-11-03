@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from .agent import Agent
 from .sessions import SessionStore
+from .vapi import create_router
 from .wiring import build_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -31,6 +32,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Cedar Lane receptionist", lifespan=lifespan)
 store: SessionStore = SessionStore(lambda sid: get_agent().new_session(sid))
+
+
+app.include_router(create_router(get_agent, store))  # Phase 2: Vapi voice
 
 
 class ChatIn(BaseModel):

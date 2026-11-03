@@ -1,8 +1,17 @@
-"""Google Calendar adapter (implements booking.CalendarPort). Auth = service account:
-create a dedicated calendar and share it with the service account email ("Make changes to events")."""
-from datetime import datetime, time, timedelta
+"""Google Calendar adapter (implements booking.CalendarPort).
 
+Two ways to sign in, chosen automatically by what GOOGLE_APPLICATION_CREDENTIALS points to:
+  * a service-account key file  -> share the calendar/sheet with the service account's email
+  * an OAuth "Desktop app" file -> run `python -m app.login` once; it works on YOUR OWN calendar and sheet
+    (use this when Google Cloud blocks service-account key creation)."""
+import json
+from datetime import datetime, time, timedelta
+from pathlib import Path
+
+from google.auth.exceptions import GoogleAuthError
+from google.auth.transport.requests import Request
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -15,8 +24,45 @@ SCOPES = [
 ]
 
 
+def credentials_kind(path: str) -> str:
+    """'service_account' for a service-account key file, 'oauth' for an OAuth Desktop-app client file."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if data.get("type") == "service_account":
+        return "service_account"
+    if "installed" in data:
+        return "oauth"
+    raise RuntimeError(f"{path} is neither a service-account key nor an OAuth 'Desktop app' client file")
+
+
+def login() -> None:
+    """One-time browser sign-in. Saves token.json so the server can later run without a browser."""
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    flow = InstalledAppFlow.from_client_secrets_file(config.GOOGLE_CREDENTIALS_FILE, SCOPES)
+    creds = flow.run_local_server(port=0)
+    Path(config.GOOGLE_TOKEN_FILE).write_text(creds.to_json(), encoding="utf-8")
+
+
+def _oauth_credentials() -> Credentials:
+    token = Path(config.GOOGLE_TOKEN_FILE)
+    if not token.is_file():
+        raise RuntimeError("Not signed in to Google yet. Run:  python -m app.login")
+    creds = Credentials.from_authorized_user_file(str(token), SCOPES)
+    if not creds.valid:  # the short-lived access token ran out: swap the saved refresh token for a new one
+        try:
+            creds.refresh(Request())
+        except GoogleAuthError:
+            raise RuntimeError("Your Google sign-in has expired. Run again:  python -m app.login")
+        token.write_text(creds.to_json(), encoding="utf-8")
+    return creds
+
+
 def google_service(name: str, version: str):
-    creds = service_account.Credentials.from_service_account_file(config.GOOGLE_CREDENTIALS_FILE, scopes=SCOPES)
+    path = config.GOOGLE_CREDENTIALS_FILE
+    if credentials_kind(path) == "service_account":
+        creds = service_account.Credentials.from_service_account_file(path, scopes=SCOPES)
+    else:
+        creds = _oauth_credentials()
     return build(name, version, credentials=creds, cache_discovery=False)
 
 
@@ -67,7 +113,7 @@ class GoogleCalendar:
             if e.get("transparency") == "transparent":  # marked "free" by whoever made it
                 continue
             s, en = self._times(e)
-            out.append(Busy(s, en, e["id"]))
+            out.append(Busy(s, en, e["id"], all_day="date" in e["start"], title=e.get("summary", "")))
         return out
 
     def create_event(self, *, start, end, summary, description, phone, service_key):

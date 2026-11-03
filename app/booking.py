@@ -113,6 +113,24 @@ class Booking:
                 return {"date": d.isoformat(), "weekday": d.strftime("%A"), "first_open": slot(starts[0])}
         return None
 
+    def _closure(self, d: date, busy: list[Busy]) -> str | None:
+        """Title of an all-day calendar event covering this whole day (staff training, holiday...), else None."""
+        day_start = datetime.combine(d, time(0), tzinfo=self.tz)
+        for b in busy:
+            if b.all_day and b.start <= day_start and b.end >= day_start + timedelta(days=1):
+                return (b.title or "special closure").strip()[:80]
+        return None
+
+    def _require_free(self, start: datetime, svc: shop.Service, ignore_event_id: str | None = None) -> None:
+        """Raise a BookingError (with alternatives) unless this slot can be booked."""
+        busy = self._busy(start.date())
+        closure = self._closure(start.date(), busy)
+        if closure:
+            raise BookingError("closed", f"We're closed that day ({closure}).", self._alternatives(start, svc))
+        reason = bookable_reason(start, svc.minutes, busy, self.now(), ignore_event_id=ignore_event_id)
+        if reason:
+            self._fail(reason, start, svc)
+
     def _fail(self, reason: str, start: datetime, svc: shop.Service):
         raise BookingError(reason, ERROR_TEXT[reason], self._alternatives(start, svc))
 
@@ -123,9 +141,15 @@ class Booking:
         busy = self._busy(d, SEARCH_DAYS_AHEAD + 1)
         out = {"date": d.isoformat(), "weekday": d.strftime("%A"), "service": svc.name, "minutes": svc.minutes}
         if shop.OPEN_HOURS.get(d.weekday()) is None:
-            return {**out, "closed": True, "next_open_day": self._next_open_day(d, svc, busy)}
+            return {**out, "closed": True, "special_closure": False, "closure_reason": "regular weekly closed day",
+                    "next_open_day": self._next_open_day(d, svc, busy)}
+        closure = self._closure(d, busy)
+        if closure:  # open on a normal week, but the calendar says closed on THIS date
+            return {**out, "closed": True, "special_closure": True, "closure_reason": closure,
+                    "next_open_day": self._next_open_day(d, svc, busy)}
         starts = open_starts(d, svc.minutes, busy, self.now(), self.tz)
-        out |= {"closed": False, "open_slots": [slot(s) for s in starts]}
+        out |= {"closed": False, "special_closure": False, "fully_booked": not starts,
+                "open_slots": [slot(s) for s in starts]}
         if preferred:
             want = self._start(day, preferred)
             out["preferred_time"] = label(want)
@@ -146,9 +170,7 @@ class Booking:
         end = start + timedelta(minutes=svc.minutes)
         with self._lock:
             # re-check right before writing: availability may have changed since check_availability
-            reason = bookable_reason(start, svc.minutes, self._busy(start.date()), self.now())
-            if reason:
-                self._fail(reason, start, svc)
+            self._require_free(start, svc)
             if any(a.start == start for a in self.cal.find_by_phone(digits, self.now())):
                 raise BookingError("duplicate", "This caller already has an appointment at that time.")
             desc = f"Phone: {format_phone(digits)}\nVehicle: {vehicle or 'n/a'}\nNotes: {notes or '-'}\nBooked by AI receptionist"
@@ -179,9 +201,7 @@ class Booking:
         if start == appt.start:
             raise BookingError("same_time", "That's already the appointment time.")
         with self._lock:
-            reason = bookable_reason(start, svc.minutes, self._busy(start.date()), self.now(), ignore_event_id=event_id)
-            if reason:
-                self._fail(reason, start, svc)
+            self._require_free(start, svc, ignore_event_id=event_id)
             self.cal.move_event(event_id, start, end)
         return {
             "service": svc.name, "old": f"{appt.start.strftime('%A %Y-%m-%d')} {label(appt.start)}",

@@ -10,14 +10,16 @@ class FakeCalendar:
         self.events: dict[str, dict] = {}
         self._ids = itertools.count(1)
 
-    def add_blocker(self, start: datetime, end: datetime, phone=None, service_key=None) -> str:
+    def add_blocker(self, start: datetime, end: datetime, phone=None, service_key=None, all_day=False, title="") -> str:
         eid = f"ev{next(self._ids)}"
-        self.events[eid] = dict(start=start, end=end, phone=phone, service_key=service_key, notes=[])
+        self.events[eid] = dict(start=start, end=end, phone=phone, service_key=service_key, notes=[],
+                                all_day=all_day, title=title)
         return eid
 
     # --- CalendarPort ---
     def list_busy(self, start, end):
-        return [Busy(e["start"], e["end"], i) for i, e in self.events.items() if e["start"] < end and e["end"] > start]
+        return [Busy(e["start"], e["end"], i, e["all_day"], e["title"])
+                for i, e in self.events.items() if e["start"] < end and e["end"] > start]
 
     def create_event(self, *, start, end, summary, description, phone, service_key):
         return self.add_blocker(start, end, phone, service_key)

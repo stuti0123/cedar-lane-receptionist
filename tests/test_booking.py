@@ -116,3 +116,43 @@ def test_running_late(booking, cal):
     with pytest.raises(BookingError) as e:
         booking.mark_late(other["event_id"], PHONE, 10)
     assert e.value.code == "not_today"
+
+
+# ---------------- special closures vs fully booked ----------------
+def close_friday(cal):
+    cal.add_blocker(at(6, 0), at(7, 0), all_day=True, title="Shop closed - staff training")
+
+
+def test_all_day_event_is_a_special_closure_not_a_full_day(booking, cal):
+    close_friday(cal)
+    r = booking.check("2026-11-06", "full_detail")
+    assert r["closed"] and r["special_closure"] and "staff training" in r["closure_reason"]
+    assert r["next_open_day"]["weekday"] == "Saturday" and "open_slots" not in r
+
+
+def test_a_genuinely_full_day_is_fully_booked_not_closed(booking, cal):
+    cal.add_blocker(at(6, 9), at(6, 18), phone="4155550111", service_key="full_detail")
+    r = booking.check("2026-11-06", "full_detail")
+    assert r["closed"] is False and r["special_closure"] is False
+    assert r["fully_booked"] is True and r["open_slots"] == []
+
+
+def test_normal_day_is_not_fully_booked(booking):
+    r = booking.check("2026-11-06", "express_wash")
+    assert r["fully_booked"] is False and r["open_slots"]
+
+
+def test_weekly_closed_day_has_its_own_reason(booking):
+    r = booking.check("2026-11-08", "full_detail")  # Sunday
+    assert r["closed"] and r["special_closure"] is False and "weekly" in r["closure_reason"]
+
+
+def test_booking_or_moving_onto_a_closure_day_says_why(booking, cal):
+    close_friday(cal)
+    with pytest.raises(BookingError) as e:
+        booking.book("2026-11-06", "10:00", "express_wash", "Sara", PHONE)
+    assert e.value.code == "closed" and "staff training" in e.value.message and e.value.extra["next_open_day"]
+    mine = booking.book("2026-11-05", "10:00", "express_wash", "Sara", PHONE)
+    with pytest.raises(BookingError) as e:
+        booking.reschedule(mine["event_id"], PHONE, "2026-11-06", "10:00")
+    assert e.value.code == "closed"

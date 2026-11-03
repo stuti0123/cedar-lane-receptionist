@@ -1,6 +1,11 @@
 .env
 service_account.json
+oauth_client.json
+client_secret*.json
+token.json
 *.json.key
 __pycache__/
 .pytest_cache/
 .venv/
+docs/PRIVATE_PREP.md
+.vscode/

@@ -53,6 +53,7 @@ def test_drop():
 
 
 def test_validate_lists_every_problem(monkeypatch):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "anthropic")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(config, "GOOGLE_CALENDAR_ID", "")
     monkeypatch.setattr(config, "GOOGLE_SHEET_ID", "")
@@ -66,8 +67,25 @@ def test_validate_lists_every_problem(monkeypatch):
 def test_validate_passes_when_everything_is_set(monkeypatch, tmp_path):
     creds = tmp_path / "sa.json"
     creds.write_text("{}")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
     monkeypatch.setattr(config, "GOOGLE_CALENDAR_ID", "cal")
     monkeypatch.setattr(config, "GOOGLE_SHEET_ID", "sheet")
     monkeypatch.setattr(config, "GOOGLE_CREDENTIALS_FILE", str(creds))
     config.validate()  # no exception
+
+
+def test_validate_asks_for_the_right_key_per_provider(monkeypatch, tmp_path):
+    creds = tmp_path / "sa.json"
+    creds.write_text("{}")
+    monkeypatch.setattr(config, "GOOGLE_CALENDAR_ID", "cal")
+    monkeypatch.setattr(config, "GOOGLE_SHEET_ID", "sheet")
+    monkeypatch.setattr(config, "GOOGLE_CREDENTIALS_FILE", str(creds))
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini")
+    with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
+        config.validate()
+    monkeypatch.setattr(config, "LLM_PROVIDER", "nonsense")
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER"):
+        config.validate()
