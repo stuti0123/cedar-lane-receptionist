@@ -154,6 +154,8 @@ class Booking:
             want = self._start(day, preferred)
             out["preferred_time"] = label(want)
             out["preferred_available"] = want in starts
+            why = None if want in starts else bookable_reason(want, svc.minutes, busy, self.now())
+            out["preferred_unavailable_because"] = ERROR_TEXT.get(why) if why else None  # the real reason, from code
             near = sorted(sorted((s for s in starts if s != want), key=lambda s: abs(s - want))[:3])
             out["nearest_alternatives"] = [slot(s) for s in near]
         if not starts:

@@ -15,6 +15,12 @@ from app.vapi import call_id_of, create_router, last_user_text  # noqa: E402
 from fakes import FakeLedger  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def disable_vapi_secret_for_tests(monkeypatch):
+    """Your real .env has a VAPI_SECRET; tests must not depend on it. (test_secret_is_enforced sets its own.)"""
+    monkeypatch.setattr(config, "VAPI_SECRET", "")
+
+
 class ScriptedLLM:
     """Plays back prepared turns; remembers how long the history was each time it was asked."""
 
@@ -70,7 +76,7 @@ def test_streams_filler_first_then_the_answer_in_openai_format(booking):
     assert events[-1] == "[DONE]" and events[-2]["choices"][0]["finish_reason"] == "stop"
     assert events[0]["choices"][0]["delta"]["role"] == "assistant"
     spoken = [e["choices"][0]["delta"]["content"] for e in events[:-1] if "content" in e["choices"][0]["delta"]]
-    assert spoken == ["Let me check. ", "That one's full. 4:30 is open, want it?"]  # filler arrives BEFORE the lookup result
+    assert spoken == ["Sure, let me check that for you. ", "That one's full. 4:30 is open, want it?"]  # filler arrives BEFORE the lookup result
     assert all(e["object"] == "chat.completion.chunk" for e in events[:-1])
 
 
@@ -126,3 +132,94 @@ def test_text_chat_never_speaks_fillers(booking):
     llm = ScriptedLLM(check_thursday(), say("Final answer."))
     agent = Agent(Deps(booking, FakeLedger()), llm=llm)
     assert agent.reply(agent.new_session("s"), "q") == "Final answer."
+
+
+# ---------------- slow model: the caller must still hear something early ----------------
+import time as _time  # noqa: E402
+
+from app import vapi as vapi_mod  # noqa: E402
+
+
+class SlowLLM(ScriptedLLM):
+    def __init__(self, delay, *turns):
+        super().__init__(*turns)
+        self.delay = delay
+
+    def complete(self, history, system):
+        _time.sleep(self.delay)
+        return super().complete(history, system)
+
+
+def spoken_pieces(r):
+    return [e["choices"][0]["delta"]["content"] for e in sse(r)[:-1] if "content" in e["choices"][0]["delta"]]
+
+
+def test_slow_model_gets_a_filler_before_the_answer(booking, monkeypatch):
+    monkeypatch.setattr(vapi_mod, "FILLER_AFTER_SECONDS", 0.05)
+    client, _ = make_client(booking, SlowLLM(0.4, say("We open at nine.")))
+    r = client.post("/vapi/chat/completions", json=body("When do you open?"))
+    assert spoken_pieces(r) == [vapi_mod.SLOW_FILLER, "We open at nine."]
+    assert sse(r)[-1] == "[DONE]"
+
+
+def test_fast_model_gets_no_filler(booking):
+    client, _ = make_client(booking, ScriptedLLM(say("We open at nine.")))
+    r = client.post("/vapi/chat/completions", json=body("When do you open?"))
+    assert spoken_pieces(r) == ["We open at nine."]
+
+
+def test_keepalive_comments_do_not_break_the_stream(booking, monkeypatch):
+    monkeypatch.setattr(vapi_mod, "FILLER_AFTER_SECONDS", 0.02)
+    monkeypatch.setattr(vapi_mod, "KEEPALIVE_SECONDS", 0.05)
+    client, _ = make_client(booking, SlowLLM(0.3, say("Done.")))
+    r = client.post("/vapi/chat/completions", json=body("hi"))
+    assert ": keep-alive" in r.text
+    assert spoken_pieces(r) == [vapi_mod.SLOW_FILLER, "Done."] and sse(r)[-1] == "[DONE]"
+
+
+def test_no_double_filler_when_the_model_was_slow_and_a_tool_runs(booking, monkeypatch):
+    monkeypatch.setattr(vapi_mod, "FILLER_AFTER_SECONDS", 0.05)
+    client, _ = make_client(booking, SlowLLM(0.3, check_thursday(), say("That one's full.")))
+    r = client.post("/vapi/chat/completions", json=body("Can I book 3:30 Thursday?"))
+    assert spoken_pieces(r) == [vapi_mod.SLOW_FILLER, "That one's full."]
+
+
+# ---------------- the caller kept talking: abandoned requests must not book or pollute the history ----------------
+def book_turn():
+    call = ToolCall("b1", "book_appointment", dict(date="2026-11-05", time="10:00", service="express_wash",
+                                                   name="Sara", phone="4155550190"))
+    return Turn("", [call], {"role": "model", "call": "book"})
+
+
+class HangsUpAfterThinking(ScriptedLLM):
+    """After the model decides to book, Vapi 'hangs up' (the caller said something more)."""
+
+    def __init__(self, *turns):
+        super().__init__(*turns)
+        self.gone = False
+
+    def complete(self, history, system):
+        turn = super().complete(history, system)
+        self.gone = True
+        return turn
+
+
+def test_abandoned_request_does_not_book_and_leaves_no_trace(booking, cal):
+    llm = HangsUpAfterThinking(book_turn())
+    agent = Agent(Deps(booking, FakeLedger()), llm=llm)
+    session = agent.new_session("s")
+    list(agent.stream(session, "book 10am, my number is 415 555", interim=True, cancelled=lambda: llm.gone))
+    assert cal.events == {} and session.messages == []
+
+
+def test_request_abandoned_while_waiting_for_its_turn_does_nothing(booking):
+    agent = Agent(Deps(booking, FakeLedger()), llm=ScriptedLLM())  # would raise if the model were consulted
+    session = agent.new_session("s")
+    assert list(agent.stream(session, "hi", interim=True, cancelled=lambda: True)) == [] and session.messages == []
+
+
+def test_only_one_filler_even_when_several_tools_run(booking):
+    llm = ScriptedLLM(check_thursday(), check_thursday(), say("All set."))
+    agent = Agent(Deps(booking, FakeLedger()), llm=llm)
+    out = list(agent.stream(agent.new_session("s"), "q", interim=True))
+    assert out == ["Sure, let me check that for you. ", "All set."]

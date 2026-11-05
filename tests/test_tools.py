@@ -58,3 +58,24 @@ def test_sheet_failure_does_not_fail_the_booking(env):
     out = run_tool("book_appointment", dict(date="2026-11-05", time="10:00", service="express_wash",
                                             name="Sara", phone=PHONE), ctx, deps)
     assert out["ok"] is True
+
+
+def test_voice_booking_needs_a_readback_confirmation_first(env, cal):
+    deps, ctx, ledger = env
+    ctx.confirm_booking = True
+    args = dict(date="2026-11-05", time="16:30", service="interior_detail_wash", name="Sara", phone="452 555 0123")
+    ctx.turn = 1
+    first = run_tool("book_appointment", args, ctx, deps)
+    assert first["ok"] is False and first["error"] == "confirm_first" and cal.events == {}
+    assert run_tool("book_appointment", args, ctx, deps)["error"] == "confirm_first"  # same caller message: still no
+    ctx.turn = 2  # the caller answered
+    assert run_tool("book_appointment", dict(args, phone="415 555 0123"), ctx, deps)["error"] == "confirm_first"  # corrected number: ask again
+    ctx.turn = 3
+    assert run_tool("book_appointment", dict(args, phone="415 555 0123"), ctx, deps)["ok"] is True
+    assert len(cal.events) == 1
+
+
+def test_text_chat_books_without_the_voice_confirmation(env):
+    deps, ctx, _ = env  # confirm_booking is off by default
+    assert run_tool("book_appointment", dict(date="2026-11-05", time="10:00", service="express_wash",
+                                             name="Sara", phone=PHONE), ctx, deps)["ok"] is True

@@ -25,6 +25,10 @@ HOW YOU WORK
 - Never say whether a time is free from memory. Call check_availability first. Never say something is booked, \
 moved or cancelled unless the tool returned ok. If a tool fails, use its message; if a time is taken, offer the \
 alternatives it returned.
+- Never guess WHY a time is unavailable. When preferred_available is false, give only the reason in \
+preferred_unavailable_because (for example "already booked"); do not blame closing time or anything else on your own.
+- If a caller names two different services, ask which one they want before checking. On a voice call, before you \
+book, repeat the phone number back and wait for a yes.
 - The opening hours in the shop information are the NORMAL weekly hours only. The calendar can hold special \
 closures. For ANY question about a specific day ("are you open Friday?", "can I come on the 6th?") call \
 check_availability first (use the service they mentioned, otherwise express_wash) and answer from the result: if \
@@ -38,7 +42,6 @@ affects the answer (price, or whether we can do it); pass it along if they menti
 - Rescheduling / cancelling / running late: get their phone number, call find_appointments, pick the right \
 appointment (ask if they have several), then act. For rescheduling, check availability for the new time first. \
 For running late: report_running_late; if within the grace period reassure them, otherwise offer to reschedule.
-- Before you reschedule or cancel, say exactly what you are about to change (service, old time, new time) and wait for a clear yes. If the caller gave no new time, ask for one; never assume the old time.
 - Pricing, hours, prep and vehicle questions: answer ONLY from the shop information above, then call \
 log_call_note. If the answer is not in the shop information, do not guess: say you'll have someone get back to \
 them and use handoff_to_human.
@@ -76,31 +79,61 @@ class Agent:
         """Text chat: wait for the whole answer."""
         return "".join(self.stream(session, user_text, interim=False)).strip()
 
-    def stream(self, session: Session, user_text: str, interim: bool = False):
+    def stream(self, session: Session, user_text: str, interim: bool = False, cancelled=None):
         """Yields the answer in pieces. With interim=True (voice calls) it also speaks a short
         'let me check' BEFORE running a slow tool, so the caller never hears dead air."""
+        def abandoned() -> bool:
+            return cancelled is not None and cancelled()
+
         with session.lock:  # one message at a time per conversation
+            if abandoned():  # Vapi already moved on (the caller kept talking) while we waited our turn
+                return
             start = len(session.messages)
             session.messages.append(self.llm.user_message(user_text))
+            session.ctx.turn += 1
+            acted = False  # has a tool already run in this turn?
+            said_filler = False  # one "let me check" per answer is enough
             for _ in range(config.MAX_TOOL_STEPS):
+                if abandoned():  # nobody is listening to this answer any more: do nothing further
+                    if not acted:
+                        del session.messages[start:]  # forget it; the caller's next request carries the full sentence
+                    return
+                streaming = interim and config.GEMINI_STREAM and hasattr(self.llm, "complete_stream")
                 try:
-                    turn = self.llm.complete(session.messages, system_prompt(self.deps.booking.now()))
+                    if streaming:  # words go out as the model writes them (voice only)
+                        turn = yield from self.llm.complete_stream(session.messages, system_prompt(self.deps.booking.now()))
+                    else:
+                        turn = self.llm.complete(session.messages, system_prompt(self.deps.booking.now()))
                 except Exception:
                     log.exception("model call failed")
                     if len(session.messages) == start + 1:  # nothing happened yet: forget this message so a retry is clean
                         del session.messages[start:]
                     yield "Sorry, I'm having trouble right now. Could you say that again in a moment?"
                     return
-                session.messages.append(turn.message)
-                if not turn.tool_calls:
-                    yield turn.text
+                # The caller may have continued speaking while the model was thinking.
+                # Don't save or send a stale answer.
+                if abandoned():
+                    if not acted:
+                        del session.messages[start:]
                     return
 
-                if interim:  # say something while the tools run
+                session.messages.append(turn.message)
+                if not turn.tool_calls:
+                    if not streaming:  # (when streaming, the words were already spoken)
+                        yield turn.text
+                    return
+
+                if interim and not said_filler and (not streaming or not turn.text):  # say something while tools run
+                    said_filler = True
                     yield (turn.text + " ") if turn.text else self._filler(turn.tool_calls)
 
                 results = []
                 for call in turn.tool_calls:
+                    if abandoned() and not acted:  # never book/change anything for an answer nobody will hear
+                        log.info("caller moved on; skipping tool %s", call.name)
+                        del session.messages[start:]
+                        return
+                    acted = True
                     try:
                         out = run_tool(call.name, call.args, session.ctx, self.deps)
                     except Exception:
@@ -111,12 +144,14 @@ class Agent:
                 session.messages.append(self.llm.tool_results_message(results))
             yield "Sorry, I'm having trouble with that. Let me have someone call you back."
 
+    FILLERS = ("Sure, let me check that for you. ", "Sure, one moment while I take care of that. ")
+
     @staticmethod
     def _filler(calls) -> str:
         """A natural few words for the caller to hear while we look something up. Silent for other tools."""
         names = {c.name for c in calls}
         if names & {"check_availability", "find_appointments"}:
-            return "Let me check. "
+            return Agent.FILLERS[0]
         if names & {"book_appointment", "reschedule_appointment", "cancel_appointment"}:
-            return "One moment. "
+            return Agent.FILLERS[1]
         return ""

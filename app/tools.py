@@ -124,6 +124,15 @@ def run_tool(name: str, args: dict, ctx: CallContext, deps: Deps) -> dict:
             return {"ok": True, **b.check(args["date"], args["service"], args.get("preferred_time"))}
 
         if name == "book_appointment":
+            if ctx.confirm_booking:
+                key = (args["date"], args["time"], args["service"], "".join(c for c in str(args["phone"]) if c.isdigit()))
+                if ctx.pending_booking != key or ctx.pending_turn >= ctx.turn:  # not yet confirmed by the caller
+                    ctx.pending_booking, ctx.pending_turn = key, ctx.turn
+                    return {"ok": False, "error": "confirm_first",
+                            "message": "STOP - NOT booked yet. Do not call any tool now. Reply to the caller: read "
+                                       "the service, day, time and the phone number digit by digit back and ask them to "
+                                       "confirm. Only after the caller says yes, call book_appointment again with exactly "
+                                       "the same details (use corrected details if they change anything)."}
             r = b.book(args["date"], args["time"], args["service"], args["name"], args["phone"],
                        args.get("vehicle"), args.get("notes"))
             _remember(ctx, args["name"], args["phone"], args.get("vehicle"))

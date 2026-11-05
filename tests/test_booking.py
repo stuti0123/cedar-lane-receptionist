@@ -156,3 +156,13 @@ def test_booking_or_moving_onto_a_closure_day_says_why(booking, cal):
     with pytest.raises(BookingError) as e:
         booking.reschedule(mine["event_id"], PHONE, "2026-11-06", "10:00")
     assert e.value.code == "closed"
+
+
+def test_check_gives_the_real_reason_a_time_is_unavailable(booking, cal):
+    seed_thursday_330(cal)
+    taken = booking.check("2026-11-05", "interior_detail_wash", preferred="15:30")
+    assert "booked" in taken["preferred_unavailable_because"]
+    too_late = booking.check("2026-11-05", "full_detail", preferred="17:00")  # 2h service would run past 6 PM
+    assert "before closing" in too_late["preferred_unavailable_because"]
+    free = booking.check("2026-11-05", "express_wash", preferred="10:00")
+    assert free["preferred_unavailable_because"] is None

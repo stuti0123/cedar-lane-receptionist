@@ -23,6 +23,11 @@ class CallContext:
     name: str | None = None
     vehicle: str | None = None
     call_counted: bool = False  # so 'Total Calls' goes up once per conversation, not once per log line
+    # Voice calls mishear digits, so a booking is only made after the caller has heard the details read back:
+    confirm_booking: bool = False          # on for voice calls
+    turn: int = 0                          # how many caller messages so far
+    pending_booking: tuple | None = None   # the booking details we asked the caller to confirm
+    pending_turn: int = -1                 # the caller message on which we asked
 
 
 @dataclass(frozen=True)
