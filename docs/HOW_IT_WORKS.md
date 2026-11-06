@@ -51,7 +51,7 @@ handle, damage claims, angry callers, anything it doesn't know. It never promise
 4. **A Sheet problem never ruins a booking.** If the notebook is unavailable, the booking still stands and the problem is logged.
 5. **No endless loops.** The AI gets at most 8 actions per message; idle conversations expire after an hour.
 
-## What's in the project (one line each)
+## What's in the project 
 - `shop.py`: the shop's facts (services, prices, hours, rules). Change the shop here.
 - `availability.py`: the "is this time free?" maths. No internet, fully tested.
 - `booking.py`: the rules for booking, moving, cancelling.
@@ -61,24 +61,3 @@ handle, damage claims, angry callers, anything it doesn't know. It never promise
 - `server.py`, `static/index.html`: a small website to chat with it. `cli.py`: chat in the terminal.
 - `seed.py`: fills the calendar with sample appointments for testing.
 - `tests/`: 36 automatic checks (no internet needed) that prove the rules hold.
-
-## Show it (a 3-minute demo script)
-1. Open the Calendar and the Sheet side by side with the chat.
-2. "Is 3:30 on Thursday open for an interior detail and wash?" -> "full", offers 4:30.
-3. "Sure" -> give name and number -> booked. Show the new event and the new Sheet row.
-4. "I need to move that to Tuesday morning" -> give number -> moved. Show the calendar change.
-5. "How much is a full detail for an SUV?" -> answers from the price list.
-6. "You overcharged me last week" -> polite handoff; show **Needs Callback = YES** in the Sheet.
-
-## Words you may hear
-- **LLM / AI model**: the language program (here the AI model) that understands and writes text.
-- **Tool / function calling**: the AI asks the program to do something real (like look at the calendar) instead of guessing.
-- **Service account**: a robot Google login for the program, which we share the calendar and Sheet with.
-- **API**: the way one program asks another for things (here, asking Google for events).
-- **Handoff**: passing the caller to a human with a clear note of what they need.
-
-## Honest limits (good to say out loud)
-- It is a text chat for now; voice comes in Phase 2.
-- Prices, hours and policies are made-up examples, easy to change in `shop.py`.
-- One server process only (the "last-moment check" lock lives inside it); a bigger setup would need a shared lock.
-- Phone numbers are US-style (10 digits).
