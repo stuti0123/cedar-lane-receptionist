@@ -98,6 +98,31 @@ TOOL_SPECS = [
 ]
 
 
+DIGIT_WORDS = dict(zip("0123456789", "zero one two three four five six seven eight nine".split()))
+
+
+def _digits(text: str) -> str:
+    return "".join(c for c in text if c.isdigit())
+
+
+def _phone_not_heard(ctx: CallContext, digits: str) -> dict | None:
+    """Voice: the model sometimes mangles a number it was told (drops a digit, copies an old one). If the caller's own
+    words contain digits, the number we're about to use must appear in them. When the words hold no digits
+    (e.g. the transcript spelled them out), we can't check, so the read-back is the safety net."""
+    recent = [_digits(t) for t in ctx.recent_user_texts[-4:]]
+    heard = [d for d in recent if len(d) >= 7]
+    if not heard or any(digits in d for d in heard) or digits in "".join(recent[-2:]):
+        return None
+    exact = next((d[-10:] for d in reversed(heard) if len(d) == 10 or (len(d) == 11 and d[0] == "1")), None)
+    if exact:
+        return {"ok": False, "error": "phone_mismatch", "heard_phone": exact,
+                "message": f"That number does not match what the caller said. They said the digits {exact}. Use exactly "
+                           "that number (do not change it), and read it back to confirm."}
+    return {"ok": False, "error": "phone_mismatch",
+            "message": "That number does not match what the caller said. Do not book. Ask them to say the whole number "
+                       "again, slowly, three digits at a time."}
+
+
 def _remember(ctx: CallContext, name=None, phone=None, vehicle=None) -> None:
     """Store what we've learned about the caller on the conversation context."""
     if phone:
@@ -125,14 +150,26 @@ def run_tool(name: str, args: dict, ctx: CallContext, deps: Deps) -> dict:
 
         if name == "book_appointment":
             if ctx.confirm_booking:
-                key = (args["date"], args["time"], args["service"], "".join(c for c in str(args["phone"]) if c.isdigit()))
+                try:
+                    digits = normalize_phone(str(args["phone"]))
+                except ValueError:  # e.g. the caller's number arrived in pieces: never book on a partial number
+                    return {"ok": False, "error": "bad_phone",
+                            "message": "That is not a full 10-digit number. Do not book. Ask the caller to say the "
+                                       "whole number again, slowly, three digits at a time."}
+                wrong = _phone_not_heard(ctx, digits)  # the model must not invent or mangle digits
+                if wrong:
+                    return wrong
+                key = (args["date"], args["time"], args["service"], digits)
                 if ctx.pending_booking != key or ctx.pending_turn >= ctx.turn:  # not yet confirmed by the caller
                     ctx.pending_booking, ctx.pending_turn = key, ctx.turn
-                    return {"ok": False, "error": "confirm_first",
+                    spoken = ", ".join(" ".join(DIGIT_WORDS[d] for d in g)
+                                       for g in (digits[:3], digits[3:6], digits[6:]))
+                    return {"ok": False, "error": "confirm_first", "read_back_phone": spoken,
                             "message": "STOP - NOT booked yet. Do not call any tool now. Reply to the caller: read "
-                                       "the service, day, time and the phone number digit by digit back and ask them to "
-                                       "confirm. Only after the caller says yes, call book_appointment again with exactly "
-                                       "the same details (use corrected details if they change anything)."}
+                                       f"back the service, day and time, then the number exactly as: \"{spoken}\". "
+                                       "Ask if that is right. Only after the caller says yes, call book_appointment "
+                                       "again with exactly the same details (use corrected details if they change "
+                                       "anything)."}
             r = b.book(args["date"], args["time"], args["service"], args["name"], args["phone"],
                        args.get("vehicle"), args.get("notes"))
             _remember(ctx, args["name"], args["phone"], args.get("vehicle"))

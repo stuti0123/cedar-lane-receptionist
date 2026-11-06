@@ -1,5 +1,5 @@
 """Small data types shared by the logic and the Google adapters."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -28,6 +28,7 @@ class CallContext:
     turn: int = 0                          # how many caller messages so far
     pending_booking: tuple | None = None   # the booking details we asked the caller to confirm
     pending_turn: int = -1                 # the caller message on which we asked
+    recent_user_texts: list = field(default_factory=list)  # what the caller actually said (to double-check phone digits)
 
 
 @dataclass(frozen=True)

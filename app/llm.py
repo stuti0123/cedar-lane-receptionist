@@ -18,6 +18,17 @@ from .tools import TOOL_SPECS
 log = logging.getLogger(__name__)
 
 
+MAX_RATE_LIMIT_WAIT = 4.0  # seconds: longer than this and the caller is better served by the fallback sentence
+
+
+def _retry_after(err) -> float | None:
+    """Seconds the provider asks us to wait after a 429, or None if it didn't say."""
+    try:
+        return float(err.response.headers["retry-after"])
+    except Exception:
+        return None
+
+
 @dataclass
 class ToolCall:
     id: str
@@ -191,26 +202,40 @@ class OpenAICompatLLM:
         out = [{"role": "system", "content": system}]
         for m in history:
             if m.get("role") == self.TOOLS_BATCH:
-                out += [{"role": "tool", "tool_call_id": cid, "content": json.dumps(res)} for cid, res in m["items"]]
+                out += [{"role": "tool", "tool_call_id": cid, "content": json.dumps(res, separators=(",", ":"))} for cid, res in m["items"]]
             else:
                 out.append(m)
         return out
+
+    def _create_with_retries(self, kwargs: dict):
+        """One model call, tolerating the two free-tier hiccups we actually see:
+        - 400 "tool call validation failed": the model garbled its own tool call (e.g. 'book_appointment<|channel|>...').
+          Asking again almost always works, and nothing was executed, so retrying is safe.
+        - 429 rate limit: only worth waiting for when the server says it clears within a few seconds."""
+        for attempt in range(1, 4):
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except Exception as e:
+                status = getattr(e, "status_code", None)
+                wait = 0.5 * attempt
+                if status == 429:
+                    wait = _retry_after(e)
+                    if wait is None or wait > MAX_RATE_LIMIT_WAIT:
+                        log.error("model rate limit reached (retry in %s s). Not waiting.", wait)
+                        raise
+                elif status not in (400, 500, 502, 503):
+                    raise
+                if attempt == 3:
+                    raise
+                log.warning("model call failed (%s), retrying (%s/2) in %.1fs", status, attempt, wait)
+                time.sleep(wait)
 
     def complete(self, history: list, system: str) -> Turn:
         extra = {"reasoning_effort": config.GROQ_REASONING_EFFORT} if config.GROQ_REASONING_EFFORT else {}
         kwargs = dict(model=self.model, messages=self._wire(history, system), tools=self._tools,
               tool_choice="auto", temperature=0.2, max_tokens=500,
               **({"extra_body": extra} if extra else {}))
-        for attempt in range(1, 4):  # these models occasionally produce a malformed tool call, or the service is busy
-            try:
-                resp = self.client.chat.completions.create(**kwargs)
-                break
-            except Exception as e:
-                status = getattr(e, "status_code", None)
-                if status == 429 or status not in (500, 502, 503) or attempt == 3:
-                    raise
-                log.warning("Groq returned %s, retrying (%s/2)", status, attempt)
-                time.sleep(0.5 * attempt)
+        resp = self._create_with_retries(kwargs)
         choice = resp.choices[0]
         msg = choice.message
         if not msg.tool_calls and not (msg.content or "").strip():  # e.g. ran out of room while thinking

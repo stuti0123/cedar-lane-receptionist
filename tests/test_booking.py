@@ -20,7 +20,8 @@ def test_check_reports_taken_slot_and_offers_430(booking, cal):
     r = booking.check("2026-11-05", "interior_detail_wash", preferred="15:30")
     assert r["preferred_available"] is False
     assert "4:30 PM" in labels(r["nearest_alternatives"])
-    assert "3:30 PM" not in labels(r["open_slots"])
+    assert "3:30 PM" not in labels(r["nearest_alternatives"])
+    assert "open_slots" not in r  # slimmed: with a preferred time, the nearest alternatives are enough
 
 
 def test_check_closed_day_points_to_next_open_day(booking):

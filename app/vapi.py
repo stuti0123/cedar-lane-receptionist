@@ -101,6 +101,10 @@ def create_router(get_agent: Callable, store) -> APIRouter:
 
                 def work():  # the agent is blocking code (the model + Google): run it beside the stream
                     try:
+                        if text:  # Vapi re-sends on every speech fragment and hangs up on the old one: wait a beat first
+                            deadline = time.monotonic() + config.VAPI_DEBOUNCE_SECONDS
+                            while time.monotonic() < deadline and not gone.is_set():
+                                time.sleep(0.05)
                         for piece in pieces:
                             put(piece)
                     except Exception:

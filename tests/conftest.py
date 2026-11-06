@@ -28,3 +28,11 @@ def cal():
 @pytest.fixture
 def booking(cal):
     return Booking(cal, tz=SHOP_TZ, clock=lambda: NOW)
+
+
+@pytest.fixture(autouse=True)
+def no_vapi_debounce(monkeypatch):
+    """Tests shouldn't wait for the real-call debounce."""
+    from app import config
+
+    monkeypatch.setattr(config, "VAPI_DEBOUNCE_SECONDS", 0.0)

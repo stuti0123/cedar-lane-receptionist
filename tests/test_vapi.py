@@ -223,3 +223,13 @@ def test_only_one_filler_even_when_several_tools_run(booking):
     agent = Agent(Deps(booking, FakeLedger()), llm=llm)
     out = list(agent.stream(agent.new_session("s"), "q", interim=True))
     assert out == ["Sure, let me check that for you. ", "All set."]
+
+
+def test_debounce_delays_the_model_but_still_answers(booking, monkeypatch):
+    import time
+
+    monkeypatch.setattr(config, "VAPI_DEBOUNCE_SECONDS", 0.3)
+    client, _ = make_client(booking, ScriptedLLM(say("Hello there.")))
+    t0 = time.monotonic()
+    r = client.post("/vapi/chat/completions", json=body("hi"))
+    assert "Hello there." in r.text and time.monotonic() - t0 >= 0.3

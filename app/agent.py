@@ -91,6 +91,7 @@ class Agent:
             start = len(session.messages)
             session.messages.append(self.llm.user_message(user_text))
             session.ctx.turn += 1
+            session.ctx.recent_user_texts = (session.ctx.recent_user_texts + [user_text])[-6:]
             acted = False  # has a tool already run in this turn?
             said_filler = False  # one "let me check" per answer is enough
             for _ in range(config.MAX_TOOL_STEPS):

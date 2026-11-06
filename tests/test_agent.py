@@ -284,3 +284,46 @@ def test_openai_compatible_loop_runs_tool_then_returns_text(booking):
     assert second[0]["role"] == "system" and second[-2]["tool_calls"][0]["id"] == "call_1"
     assert second[-1]["role"] == "tool" and second[-1]["tool_call_id"] == "call_1"
     assert json.loads(second[-1]["content"])["preferred_available"] is True
+
+
+def _err(status, retry_after=None):
+    resp = NS(headers={"retry-after": str(retry_after)}) if retry_after is not None else None
+    return type("E", (Exception,), {"status_code": status, "response": resp})()
+
+
+def test_openai_compatible_retries_a_garbled_tool_call(monkeypatch):
+    monkeypatch.setattr("app.llm.time.sleep", lambda s: None)
+    calls = []
+
+    def create(**kw):
+        calls.append(1)
+        if len(calls) < 3:
+            raise _err(400)  # "tool call validation failed: book_appointment<|channel|>commentary"
+        return o_msg("fine")
+
+    client = NS(chat=NS(completions=NS(create=create)))
+    assert OpenAICompatLLM(client=client, model="m").complete([{"role": "user", "content": "hi"}], "s").text == "fine"
+    assert len(calls) == 3
+
+
+def test_openai_compatible_waits_out_a_short_rate_limit_but_not_a_long_one(monkeypatch):
+    slept = []
+    monkeypatch.setattr("app.llm.time.sleep", slept.append)
+    calls = []
+
+    def short(**kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _err(429, retry_after=2)
+        return o_msg("ok")
+
+    client = NS(chat=NS(completions=NS(create=short)))
+    assert OpenAICompatLLM(client=client, model="m").complete([{"role": "user", "content": "hi"}], "s").text == "ok"
+    assert slept == [2.0]
+
+    def long(**kw):
+        raise _err(429, retry_after=40)
+
+    client = NS(chat=NS(completions=NS(create=long)))
+    with pytest.raises(Exception):
+        OpenAICompatLLM(client=client, model="m").complete([{"role": "user", "content": "hi"}], "s")

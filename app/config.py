@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(override=True)
 except ImportError:  # tests don't need dotenv
     pass
 
@@ -27,6 +27,9 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_STREAM = os.getenv("GEMINI_STREAM", "").strip().lower() in ("1", "true", "yes", "on")
 GEMINI_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "").strip().upper()
 # Groq (OpenAI-compatible, fast): LLM_PROVIDER=groq. Pick a current tool-calling model from console.groq.com/docs/models
+# Voice: wait this long before starting the model, so a request Vapi abandons because the caller kept talking
+# costs nothing (Vapi re-sends on every speech fragment). 0 turns it off.
+VAPI_DEBOUNCE_SECONDS = float(os.getenv("VAPI_DEBOUNCE_SECONDS", "0.5"))
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 # gpt-oss models "think" before answering; "low" keeps voice replies quick. Empty = don't send the setting.

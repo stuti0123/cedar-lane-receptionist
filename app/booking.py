@@ -151,6 +151,7 @@ class Booking:
         out |= {"closed": False, "special_closure": False, "fully_booked": not starts,
                 "open_slots": [slot(s) for s in starts]}
         if preferred:
+            out.pop("open_slots")  # nearest_alternatives is enough; the full list just burns tokens on every later call
             want = self._start(day, preferred)
             out["preferred_time"] = label(want)
             out["preferred_available"] = want in starts
