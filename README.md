@@ -29,6 +29,7 @@ browser chat / terminal -> agent.py (LLM loop) -> tools.py (thin wrappers) -> bo
 | `app/server.py`, `static/index.html` | FastAPI server, `/chat`, `/health`, bare chat page. Conversations expire after 1h idle (`app/sessions.py`). |
 | `app/cli.py` | Chat in the terminal and see the agent's tool calls. |
 | `app/seed.py` | Puts test events on the calendar, creates the Sheet tabs. |
+| `scripts/simulate_call.py` | Plays a scripted phone call against `/vapi/chat/completions` (no Vapi credits needed) and prints each answer with timing. |
 
 ### Key design decisions
 
@@ -95,6 +96,9 @@ Hands off: charge complaints/refunds, custom quotes (ceramic/paint correction), 
 | `... API has not been used in project ...` | Enable the Calendar / Sheets API in Google Cloud and wait a minute |
 | `API key not valid` / 400 or 403 from Gemini | `GEMINI_API_KEY` is wrong, or not saved in `.env` |
 | `429` / `RESOURCE_EXHAUSTED` from Gemini | Free-tier rate limit: wait a minute and retry, or set `GEMINI_MODEL` to another free model |
+| Voice replies "Sorry, I'm having trouble right now" and the log shows `429` from Groq | Free-tier tokens-per-minute cap. Use `LLM_PROVIDER=gemini`. |
+| Log shows `400 ... tool call validation failed` | The model garbled its own tool call. The Groq adapter retries it automatically; Gemini does not have this problem. |
+| `.env` says one provider but the log shows another | `.env` wins (`load_dotenv(override=True)`), but restart the server after editing it; it is only read at startup. |
 | `404 ... model not found` | Change `GEMINI_MODEL` in `.env` to a model listed at ai.google.dev/gemini-api/docs/pricing |
 | `401 authentication_error` (Claude only) | `ANTHROPIC_API_KEY` is wrong |
 | Agent says "booked" but nothing on the calendar | Impossible by design (it needs an `ok` tool result); check the server log for the tool call |
@@ -115,7 +119,7 @@ in small pieces. The agent can send a short filler while a lookup runs (`Agent.s
 
 ### Setup
 1. Create a Vapi account at dashboard.vapi.ai (new accounts get starter credits; check their pricing page).
-2. In `.env`, select a Gemini model available to your API key and set a random `VAPI_SECRET=...`. For voice, `GEMINI_STREAM=1` enables Gemini's streaming response path; `GEMINI_THINKING_LEVEL` and `VAPI_DEBOUNCE_SECONDS` are optional tuning settings. Keep the same secret in the Vapi Custom LLM credential.
+2. In `.env`, select a Gemini model available to your API key and set a random `VAPI_SECRET=...`. Optional voice tuning (all off or default unless you set them): `GEMINI_STREAM=1` (stream Gemini's words as they arrive) and `GEMINI_THINKING_LEVEL`, which were both *slower* in my measurements, so the demo leaves them unset; and `VAPI_DEBOUNCE_SECONDS` (default 0.5; Vapi re-sends on every speech fragment, so the model starts a beat late and skips requests Vapi abandons). Keep the same secret in the Vapi Custom LLM credential.
 3. Start the server: `python -m uvicorn app.server:app --port 8000`
 4. Make it reachable from the internet: install ngrok, then `ngrok http 8000`. Copy the `https://....ngrok-free.app` URL.
 5. In Vapi: *Integrations -> Custom LLM* -> add a credential whose API key is your `VAPI_SECRET` (Vapi sends it as `Authorization: Bearer ...`).
@@ -123,11 +127,19 @@ in small pieces. The agent can send a short filler while a lookup runs (`Agent.s
    First message: "Thanks for calling Cedar Lane Auto Detailing. How can I help?" The system prompt typed in Vapi is ignored; ours lives in `app/agent.py`.
 7. Latency settings to tune (names from Vapi's docs; check the dashboard for current wording): `startSpeakingPlan.waitSeconds` (default 0.4, lower = faster but may cut people off),
    smart endpointing (LiveKit for English), `stopSpeakingPlan` (`numWords` 0, `voiceSeconds` 0.2, `backoffSeconds` 1), and a fast voice provider.
-8. Talk to it from the dashboard (web call) or a Vapi phone number, and record.
+8. Before spending Vapi credits, rehearse with `python scripts/simulate_call.py` while the server runs (it books on the real Calendar, so delete the test event afterwards).
+9. Talk to it from the dashboard (web call) or a Vapi phone number, and record.
 
-### Measuring the 1.2 s target
-Vapi's call log shows per-turn latency. On our side `python -m app.cli` and the server log show each model call and tool result.
-The biggest levers: a fast model, short prompts, endpointing wait, voice provider. Be honest in the demo about the numbers you measured.
+### Latency: measured, and honestly short of the 1.2 s target
+Vapi's call log shows per-turn latency; the server log shows each model call, tool result and "first words after X s".
+Measured on the free Gemini tier (`gemini-3.5-flash-lite`) from India through ngrok:
+
+| Turn type | Server time to first words | Full answer |
+|---|---|---|
+| Ordinary turn (no tool) | about 2-3 s | about 2-5 s |
+| Turn that calls the Calendar (check or book) | about 2-3 s | about 4-8 s |
+
+Where the time goes: each model call took roughly 1-4 s from my network, and each Calendar lookup or booking a few more seconds, on top of Vapi's speech-to-text, endpointing and voice. What I tried: Gemini streaming and lower thinking levels (both slower here), shorter and timed filler phrases, a request debounce, cancelling abandoned requests, and a Groq model (fast, but the free tier allows only about two calls per minute for this agent: ~3k input tokens per call against a 7-8k tokens/minute cap, so it is not usable for a live call). To get under 1.2 s I would use a paid or faster model endpoint closer to the caller, a smaller prompt and tool list, a cached view of the calendar, and a deployment near the Google APIs; I did not do these because the brief asked for free tiers.
 
 ### Phase 2 limits
 - The ngrok URL changes each time you restart ngrok (update it in Vapi). The server must be running during the call.
