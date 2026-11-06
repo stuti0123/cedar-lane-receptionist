@@ -1,4 +1,4 @@
-# How the Cedar Lane AI receptionist works (plain English)
+# How the Cedar Lane AI receptionist works 
 
 ## The one-paragraph version
 Cedar Lane is a small car-detailing shop that gets about 30 calls a day. This project is an AI receptionist that
